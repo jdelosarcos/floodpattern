@@ -161,38 +161,55 @@ if uploaded_file is not None:
     st.write("Further analysis and modeling for flood severity can be integrated here.")
 
     # --- Time Series Forecasting (SARIMA/Prophet) ---
+# --- Time Series Forecasting (SARIMA/Prophet) ---
 st.write("Performing Time Series Forecasting...")
 try:
-    # Ensure columns exist
     required_cols = ['Year', 'Month', 'Day', 'Water Level']
     if not all(col in df.columns for col in required_cols):
         st.warning("Missing one or more required columns for time series analysis.")
     else:
-        # Convert to proper date
+        # --- Clean and prepare date components ---
+        df = df.copy()
+
+        # Convert Year and Day to numeric safely
         df['Year'] = pd.to_numeric(df['Year'], errors='coerce')
         df['Day'] = pd.to_numeric(df['Day'], errors='coerce')
 
+        # Map month names or numbers safely
         month_map = {
             'JANUARY': 1, 'FEBRUARY': 2, 'MARCH': 3, 'APRIL': 4, 'MAY': 5, 'JUNE': 6,
             'JULY': 7, 'AUGUST': 8, 'SEPTEMBER': 9, 'OCTOBER': 10,
             'NOVEMBER': 11, 'DECEMBER': 12, 'Unknown': 1
         }
-        df['Month_Num'] = df['Month'].map(month_map)
+
+        # Handle both text and numeric month formats
+        df['Month_Num'] = df['Month'].apply(lambda x: month_map.get(str(x).strip().upper(), pd.to_numeric(x, errors='coerce')))
+
+        # Drop rows with any missing date component
+        df = df.dropna(subset=['Year', 'Month_Num', 'Day', 'Water Level'])
+
+        # Convert columns to int safely (only valid rows remain)
+        df['Year'] = df['Year'].astype(int)
+        df['Month_Num'] = df['Month_Num'].astype(int)
+        df['Day'] = df['Day'].astype(int)
+
+        # Create valid datetime column
         df['Date'] = pd.to_datetime(dict(year=df['Year'], month=df['Month_Num'], day=df['Day']), errors='coerce')
 
         # Drop invalid or missing dates
         df = df.dropna(subset=['Date'])
         df = df.set_index('Date').sort_index()
 
-        # Resample daily
+        # --- Resample daily average ---
         ts_df_filled = df['Water Level'].resample('D').mean().fillna(method='ffill').fillna(method='bfill')
 
-        st.write("Daily Average Water Level Time Series:")
+        st.write("📈 Daily Average Water Level Time Series:")
         fig, ax = plt.subplots(figsize=(15, 7))
-        ax.plot(ts_df_filled)
+        ax.plot(ts_df_filled, label='Observed Water Level')
         ax.set_title('Daily Average Water Level Over Time')
         ax.set_xlabel('Date')
         ax.set_ylabel('Average Water Level')
+        ax.legend()
         st.pyplot(fig)
         plt.close(fig)
 
@@ -210,7 +227,7 @@ try:
             return model.fit()
 
         results_sarima = train_sarima_model(ts_df_filled)
-        st.success("SARIMA Model Trained Successfully.")
+        st.success("✅ SARIMA Model Trained Successfully.")
         st.text(results_sarima.summary())
 
         # --- Prophet Model ---
@@ -218,13 +235,13 @@ try:
         @st.cache_resource
         def train_prophet_model(ts_data):
             prophet_df = ts_data.reset_index()
-            prophet_df.columns = ['ds', 'y']  # Prophet expects these names
+            prophet_df.columns = ['ds', 'y']  # Prophet expects these column names
             model = Prophet()
             model.fit(prophet_df)
             return model, prophet_df
 
         model_prophet, prophet_df_for_future = train_prophet_model(ts_df_filled)
-        st.success("Prophet Model Trained Successfully.")
+        st.success("✅ Prophet Model Trained Successfully.")
 
         # --- Compare Models ---
         st.subheader("Model Comparison and Forecasting")
@@ -248,9 +265,9 @@ try:
         st.dataframe(perf_df)
 
         best_model = perf_df.loc[perf_df['RMSE'].idxmin(), 'Model']
-        st.write(f"✅ Best Model Based on RMSE: **{best_model}**")
+        st.write(f"🏆 Best Model Based on RMSE: **{best_model}**")
 
-        # --- Forecast Future 30 Days ---
+        # --- Forecast Next 30 Days ---
         steps_ahead = 30
         last_date = ts_df_filled.index[-1]
         future_dates = pd.date_range(last_date + pd.Timedelta(days=1), periods=steps_ahead, freq='D')
@@ -267,7 +284,7 @@ try:
         fig, ax = plt.subplots(figsize=(15, 7))
         ax.plot(ts_df_filled.index, ts_df_filled, label='Historical Data')
         ax.plot(future_forecast.index, future_forecast, color='red', label='Future Forecast')
-        ax.set_title(f"{best_model} Model Forecast (Next 30 Days)")
+        ax.set_title(f"{best_model} Forecast (Next 30 Days)")
         ax.set_xlabel('Date')
         ax.set_ylabel('Average Water Level')
         ax.legend()
@@ -275,5 +292,6 @@ try:
         plt.close(fig)
 
 except Exception as e:
-    st.error(f"❌ Time Series Analysis Error: {e}")
+    st.error(f"❌ Could not perform time series analysis and forecasting: {e}")
+
 
