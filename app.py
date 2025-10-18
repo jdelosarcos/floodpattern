@@ -161,155 +161,119 @@ if uploaded_file is not None:
     st.write("Further analysis and modeling for flood severity can be integrated here.")
 
     # --- Time Series Forecasting (SARIMA/Prophet) ---
-    st.write("Performing Time Series Forecasting...")
-    try:
-        df['Year'] = df['Year'].astype(int)
-        df['Day'] = df['Day'].astype(int)
-        month_map = {'JANUARY': 1, 'FEBRUARY': 2, 'MARCH': 3, 'APRIL': 4, 'MAY': 5, 'JUNE': 6,
-                     'JULY': 7, 'AUGUST': 8, 'SEPTEMBER': 9, 'OCTOBER': 10, 'NOVEMBER': 11, 'DECEMBER': 12, 'Unknown': 1}
-        df['Month_Num'] = df['Month'].map(month_map)
-        temp_date_df = df[['Year', 'Month_Num', 'Day']].copy()
-        temp_date_df.rename(columns={'Month_Num': 'month'}, inplace=True)
-        df['Date'] = pd.to_datetime(temp_date_df, errors='coerce')
-        df.set_index('Date', inplace=True)
-        # Handle potential NaT values introduced by to_datetime before dropping original columns
-        df = df.dropna(subset=['Date'])
-        df.drop(columns=['Year', 'Month', 'Day', 'Month_Num'], inplace=True)
+st.write("Performing Time Series Forecasting...")
+try:
+    # Ensure columns exist
+    required_cols = ['Year', 'Month', 'Day', 'Water Level']
+    if not all(col in df.columns for col in required_cols):
+        st.warning("Missing one or more required columns for time series analysis.")
+    else:
+        # Convert to proper date
+        df['Year'] = pd.to_numeric(df['Year'], errors='coerce')
+        df['Day'] = pd.to_numeric(df['Day'], errors='coerce')
 
+        month_map = {
+            'JANUARY': 1, 'FEBRUARY': 2, 'MARCH': 3, 'APRIL': 4, 'MAY': 5, 'JUNE': 6,
+            'JULY': 7, 'AUGUST': 8, 'SEPTEMBER': 9, 'OCTOBER': 10,
+            'NOVEMBER': 11, 'DECEMBER': 12, 'Unknown': 1
+        }
+        df['Month_Num'] = df['Month'].map(month_map)
+        df['Date'] = pd.to_datetime(dict(year=df['Year'], month=df['Month_Num'], day=df['Day']), errors='coerce')
+
+        # Drop invalid or missing dates
+        df = df.dropna(subset=['Date'])
+        df = df.set_index('Date').sort_index()
+
+        # Resample daily
         ts_df_filled = df['Water Level'].resample('D').mean().fillna(method='ffill').fillna(method='bfill')
 
         st.write("Daily Average Water Level Time Series:")
-        plt.figure(figsize=(15, 7))
-        plt.plot(ts_df_filled)
-        plt.title('Daily Average Water Level Over Time')
-        plt.xlabel('Date')
-        plt.ylabel('Average Water Level')
-        st.pyplot(plt)
-        plt.close()
+        fig, ax = plt.subplots(figsize=(15, 7))
+        ax.plot(ts_df_filled)
+        ax.set_title('Daily Average Water Level Over Time')
+        ax.set_xlabel('Date')
+        ax.set_ylabel('Average Water Level')
+        st.pyplot(fig)
+        plt.close(fig)
 
         # --- SARIMA Model ---
         st.write("Training SARIMA Model...")
-        @st.cache_resource # Cache the SARIMA model
+        @st.cache_resource
         def train_sarima_model(ts_data):
-            # Example optimal parameters from previous analysis
-            optimal_sarima_order = (0, 1, 0)
+            optimal_sarima_order = (1, 1, 1)
             optimal_seasonal_order = (0, 0, 0, 7)
             warnings.filterwarnings("ignore")
-            model_sarima = SARIMAX(ts_data, order=optimal_sarima_order, seasonal_order=optimal_seasonal_order,
-                                   enforce_stationarity=False, enforce_invertibility=False)
-            results_sarima = model_sarima.fit()
-            return results_sarima
+            model = SARIMAX(ts_data, order=optimal_sarima_order,
+                            seasonal_order=optimal_seasonal_order,
+                            enforce_stationarity=False,
+                            enforce_invertibility=False)
+            return model.fit()
 
         results_sarima = train_sarima_model(ts_df_filled)
-        st.write("SARIMA Model Training Complete.")
-        st.write("SARIMA Model Summary:")
-        st.text(results_sarima.summary()) # Use st.text for preformatted text
-
-        # --- SARIMAX Model with Exogenous Variables ---
-        st.write("Training SARIMAX Model with Exogenous Variables...")
-        @st.cache_resource # Cache the SARIMAX model
-        def train_sarimax_model(ts_data, dataframe):
-             exog_cols = ['No. of Families affected', 'Damage Infrastructure', 'Damage Agriculture']
-             exog_data = dataframe[exog_cols].resample('D').mean().fillna(method='ffill').fillna(method='bfill')
-             exog_data = exog_data.reindex(ts_data.index).fillna(method='ffill').fillna(method='bfill') # Ensure aligned and no NaNs
-             # Use optimal SARIMA parameters
-             optimal_sarima_order = (0, 1, 0)
-             optimal_seasonal_order = (0, 0, 0, 7)
-             warnings.filterwarnings("ignore")
-             model_sarimax = SARIMAX(ts_data, exog=exog_data, order=optimal_sarima_order,
-                                     seasonal_order=optimal_seasonal_order, enforce_stationarity=False, enforce_invertibility=False)
-             results_sarimax = model_sarimax.fit()
-             return results_sarimax, exog_data # Return exog_data for prediction
-
-        results_sarimax, exog_data_aligned = train_sarimax_model(ts_df_filled, df)
-        st.write("SARIMAX Model Training Complete.")
-        st.write("SARIMAX Model Summary:")
-        st.text(results_sarimax.summary())
+        st.success("SARIMA Model Trained Successfully.")
+        st.text(results_sarima.summary())
 
         # --- Prophet Model ---
         st.write("Training Prophet Model...")
-        @st.cache_resource # Cache the Prophet model
+        @st.cache_resource
         def train_prophet_model(ts_data):
             prophet_df = ts_data.reset_index()
-            prophet_df.rename(columns={'Date': 'ds', 'Water Level': 'y'}, inplace=True)
-            model_prophet = Prophet()
-            model_prophet.fit(prophet_df)
-            return model_prophet, prophet_df # Return prophet_df for future predictions
+            prophet_df.columns = ['ds', 'y']  # Prophet expects these names
+            model = Prophet()
+            model.fit(prophet_df)
+            return model, prophet_df
 
         model_prophet, prophet_df_for_future = train_prophet_model(ts_df_filled)
-        st.write("Prophet Model Training Complete.")
+        st.success("Prophet Model Trained Successfully.")
 
-        # --- Model Comparison and Forecasting ---
+        # --- Compare Models ---
         st.subheader("Model Comparison and Forecasting")
 
-        # Evaluate models on historical data (fitted values)
-        fitted_values_sarima = results_sarima.fittedvalues
-        fitted_values_sarimax = results_sarimax.fittedvalues
+        # Fitted values
+        fitted_sarima = results_sarima.fittedvalues
         forecast_prophet_hist = model_prophet.predict(prophet_df_for_future[['ds']])
-        fitted_values_prophet = forecast_prophet_hist.set_index('ds')['yhat'].reindex(ts_df_filled.index)
+        fitted_prophet = forecast_prophet_hist.set_index('ds')['yhat'].reindex(ts_df_filled.index)
 
-        rmse_sarima = np.sqrt(mean_squared_error(ts_df_filled, fitted_values_sarima))
-        mae_sarima = mean_absolute_error(ts_df_filled, fitted_values_sarima)
-        rmse_sarimax = np.sqrt(mean_squared_error(ts_df_filled, fitted_values_sarimax))
-        mae_sarimax = mean_absolute_error(ts_df_filled, fitted_values_sarimax)
-        rmse_prophet = np.sqrt(mean_squared_error(ts_df_filled, fitted_values_prophet))
-        mae_prophet = mean_absolute_error(ts_df_filled, fitted_values_prophet)
+        # Metrics
+        rmse_sarima = np.sqrt(mean_squared_error(ts_df_filled, fitted_sarima))
+        mae_sarima = mean_absolute_error(ts_df_filled, fitted_sarima)
+        rmse_prophet = np.sqrt(mean_squared_error(ts_df_filled, fitted_prophet))
+        mae_prophet = mean_absolute_error(ts_df_filled, fitted_prophet)
 
-        st.write("Model Performance on Historical Data:")
-        performance_data = {
-            "Model": ["Optimal SARIMA", "SARIMAX (with Exog)", "Prophet"],
-            "RMSE": [rmse_sarima, rmse_sarimax, rmse_prophet],
-            "MAE": [mae_sarima, mae_sarimax, mae_prophet]
-        }
-        performance_df = pd.DataFrame(performance_data)
-        st.dataframe(performance_df)
+        perf_df = pd.DataFrame({
+            'Model': ['SARIMA', 'Prophet'],
+            'RMSE': [rmse_sarima, rmse_prophet],
+            'MAE': [mae_sarima, mae_prophet]
+        })
+        st.dataframe(perf_df)
 
-        # Identify best model
-        best_model_name = performance_df.loc[performance_df['RMSE'].idxmin(), 'Model']
-        st.write(f"Based on RMSE on historical data, the best performing model is: **{best_model_name}**")
+        best_model = perf_df.loc[perf_df['RMSE'].idxmin(), 'Model']
+        st.write(f"✅ Best Model Based on RMSE: **{best_model}**")
 
-
-        # Make and visualize future predictions
-        st.write("Forecasting Future Water Levels (Next 30 Days):")
+        # --- Forecast Future 30 Days ---
         steps_ahead = 30
+        last_date = ts_df_filled.index[-1]
+        future_dates = pd.date_range(last_date + pd.Timedelta(days=1), periods=steps_ahead, freq='D')
 
-        if best_model_name == "Optimal SARIMA":
-            last_date = ts_df_filled.index[-1]
-            future_dates = pd.date_range(start=last_date + pd.Timedelta(days=1), periods=steps_ahead, freq='D')
-            future_forecast = results_sarima.predict(start=future_dates[0], end=future_dates[-1])
-            model_title = "Optimal SARIMA Model Forecast"
+        if best_model == 'SARIMA':
+            forecast = results_sarima.get_forecast(steps=steps_ahead)
+            future_forecast = forecast.predicted_mean
+        else:
+            future_df = model_prophet.make_future_dataframe(periods=steps_ahead)
+            future_forecast_prophet = model_prophet.predict(future_df)
+            future_forecast = future_forecast_prophet.set_index('ds')['yhat'].tail(steps_ahead)
 
-        elif best_model_name == "SARIMAX (with Exog)":
-            last_date = ts_df_filled.index[-1]
-            future_dates = pd.date_range(start=last_date + pd.Timedelta(days=1), periods=steps_ahead, freq='D')
-            # Need future exogenous data for SARIMAX prediction - use forward fill of last known values
-            last_exog_values = exog_data_aligned.iloc[-1].values.reshape(1, -1)
-            future_exog_data = pd.DataFrame(np.repeat(last_exog_values, steps_ahead, axis=0),
-                                            index=future_dates, columns=exog_data_aligned.columns)
-            future_forecast = results_sarimax.predict(start=future_dates[0], end=future_dates[-1], exog=future_exog_data)
-            model_title = "SARIMAX Model Forecast (with Exog)"
+        # --- Plot Forecast ---
+        fig, ax = plt.subplots(figsize=(15, 7))
+        ax.plot(ts_df_filled.index, ts_df_filled, label='Historical Data')
+        ax.plot(future_forecast.index, future_forecast, color='red', label='Future Forecast')
+        ax.set_title(f"{best_model} Model Forecast (Next 30 Days)")
+        ax.set_xlabel('Date')
+        ax.set_ylabel('Average Water Level')
+        ax.legend()
+        st.pyplot(fig)
+        plt.close(fig)
 
-        elif best_model_name == "Prophet":
-            future_prophet = model_prophet.make_future_dataframe(periods=steps_ahead)
-            future_forecast_prophet = model_prophet.predict(future_prophet)
-            future_forecast = future_forecast_prophet.set_index('ds')['yhat'].tail(steps_ahead) # Get only the future part
-            model_title = "Prophet Model Forecast"
+except Exception as e:
+    st.error(f"❌ Time Series Analysis Error: {e}")
 
-        # Visualize the historical data and the future forecast
-        plt.figure(figsize=(15, 7))
-        plt.plot(ts_df_filled.index, ts_df_filled, label='Historical Data')
-        plt.plot(future_forecast.index, future_forecast, color='red', label='Future Forecast')
-        plt.title(model_title)
-        plt.xlabel('Date')
-        plt.ylabel('Average Water Level')
-        plt.legend()
-        st.pyplot(plt)
-        plt.close()
-
-
-    except Exception as e:
-        st.warning(f"Could not perform time series analysis and forecasting: {e}")
-
-
-else:
-    st.info("Please upload a CSV file to begin the analysis.")
